@@ -101,11 +101,14 @@ def get_news(symbol, data):
     for end_date, row in data.iterrows():
         start_date = row['Start Date'].strftime('%Y-%m-%d')
         end_date = row['End Date'].strftime('%Y-%m-%d')
-#         print(symbol, ': ', start_date, ' - ', end_date)
+        print(f"Fetching news for {symbol}: {start_date} to {end_date}")
         time.sleep(1) # control qpm
         weekly_news = finnhub_client.company_news(symbol, _from=start_date, to=end_date)
+        print(f"Found {len(weekly_news)} news items")
         if len(weekly_news) == 0:
             raise gr.Error(f"No company news found for symbol {symbol} from finnhub!")
+        else :
+            print(weekly_news)
         weekly_news = [
             {
                 "date": datetime.fromtimestamp(n['datetime']).strftime('%Y%m%d%H%M%S'),
@@ -119,6 +122,258 @@ def get_news(symbol, data):
     data['News'] = news_list
     
     return data
+
+def get_crypto_news(symbol, data):
+    """
+    Get crypto news for a given symbol using the CoinDesk News API
+    
+    Args:
+        symbol: Cryptocurrency symbol (e.g., 'BTC', 'ETH')
+        data: DataFrame with 'Start Date' and 'End Date' columns
+    
+    Returns:
+        DataFrame with added 'News' column containing JSON strings of news
+    """
+    import requests
+    from datetime import datetime, timedelta
+    
+    # Strip the '-USD' suffix if present
+    clean_symbol = symbol.replace('-USD', '')
+    
+    # Mapping des symboles cryptos vers leurs noms complets pour la recherche
+    crypto_names = {
+        'BTC': 'Bitcoin',
+        'ETH': 'Ethereum',
+        'ADA': 'Cardano',
+        'XRP': 'Ripple',
+        'DOT': 'Polkadot',
+        'SOL': 'Solana',
+        'AVAX': 'Avalanche',
+        'MATIC': 'Polygon',
+        'LINK': 'Chainlink',
+        'UNI': 'Uniswap',
+        'DOGE': 'Dogecoin',
+        'LTC': 'Litecoin',
+        'BCH': 'Bitcoin Cash',
+        'ATOM': 'Cosmos',
+        'ALGO': 'Algorand'
+    }
+    
+    # Utiliser le nom complet si disponible, sinon le symbole
+    search_term = crypto_names.get(clean_symbol.upper(), clean_symbol)
+    
+    news_list = []
+    
+    for i, row in data.iterrows():
+        start_date = row['Start Date']
+        end_date = row['End Date']
+        
+        # Convertir les dates en timestamps Unix
+        start_ts = int(datetime.timestamp(start_date))
+        end_ts = int(datetime.timestamp(end_date))
+        
+        # Utiliser l'API CoinDesk avec l'endpoint search
+        url = "https://data-api.coindesk.com/news/v1/search"
+        
+        params = {
+            'search_string': search_term,
+            'lang': 'EN',
+            'source_key': 'coindesk',
+            'from_ts': start_ts,
+            'to_ts': end_ts,
+            'limit': 50,
+            'sort_by': 'published_on',
+            'sort_order': 'desc',
+            "api_key": os.environ.get("COINDESK_API_KEY")
+        }
+        
+        try:
+            # Ajouter des headers pour l'API CoinDesk
+            headers = {
+                'User-Agent': 'FinGPT-Forecaster/1.0',
+                'Accept': 'application/json'
+            }
+            
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+            print(f"URL: {response.url}")
+            print(f"Status Code: {response.status_code}")
+            
+            response.raise_for_status()
+            
+            api_response = response.json()
+            print(f"API Response keys: {api_response.keys()}")
+            
+            # Traiter les nouvelles selon la structure de l'API CoinDesk
+            weekly_news = []
+            
+            # Vérifier la structure de réponse correcte
+            if 'Data' in api_response and isinstance(api_response['Data'], list):
+                all_news = api_response['Data']
+            elif 'Data' in api_response and isinstance(api_response['Data'], dict):
+                # Si Data est un objet, chercher les articles à l'intérieur
+                all_news = api_response['Data'].get('articles', api_response['Data'].get('items', []))
+            else:
+                print(f"Unexpected API response structure: {api_response}")
+                all_news = []
+            
+            print(f"Found {len(all_news)} raw news items")
+            
+            for news in all_news:
+                # Utiliser PUBLISHED_ON selon la documentation
+                news_ts = news.get('PUBLISHED_ON', 0)
+                
+                # Vérifier si la nouvelle est dans la plage de dates
+                if start_ts <= news_ts <= end_ts:
+                    # Extraire les champs selon la structure API
+                    title = news.get('TITLE', '')
+                    body = news.get('BODY', news.get('SUBTITLE', ''))
+                    
+                    # Limiter la longueur du résumé
+                    summary = body[:200] + '...' if len(body) > 200 else body
+                    
+                    # Extraire l'URL
+                    url_field = news.get('URL', '')
+                    
+                    # Extraire le sentiment si disponible
+                    sentiment = news.get('SENTIMENT', '')
+                    
+                    # Extraire les mots-clés si disponibles
+                    keywords = news.get('KEYWORDS', '')
+                    
+                    # Extraire les données de source
+                    source_name = "CoinDesk"
+                    if 'SOURCE_DATA' in news and news['SOURCE_DATA']:
+                        source_name = news['SOURCE_DATA'].get('NAME', 'CoinDesk')
+                    
+                    weekly_news.append({
+                        "date": datetime.fromtimestamp(news_ts).strftime('%Y%m%d%H%M%S'),
+                        "headline": title,
+                        "summary": summary,
+                        "url": url_field,
+                        "source": source_name,
+                        "sentiment": sentiment,
+                        "keywords": keywords,
+                        "id": news.get('ID', ''),
+                        "guid": news.get('GUID', '')
+                    })
+            
+            # Trier par date (plus récent en premier)
+            weekly_news.sort(key=lambda x: x['date'], reverse=True)
+            
+            # Si aucune nouvelle trouvée dans la plage exacte, essayer une recherche plus large
+            if not weekly_news:
+                print(f"No news found for {symbol} in exact date range, trying broader search")
+                
+                # Élargir la recherche de 7 jours
+                extended_start = start_ts - (3 * 24 * 3600)
+                extended_end = end_ts + (3 * 24 * 3600)
+                
+                params_extended = {
+                    'search_string': search_term,
+                    'lang': 'EN',
+                    'source_key': 'coindesk',
+                    'from_ts': extended_start,
+                    'to_ts': extended_end,
+                    'limit': 10,
+                    "api_key": os.environ.get("COINDESK_API_KEY")
+                }
+                
+                try:
+                    response_extended = requests.get(url, params=params_extended, headers=headers, timeout=10)
+                    if response_extended.status_code == 200:
+                        api_response_extended = response_extended.json()
+                        
+                        if 'Data' in api_response_extended and isinstance(api_response_extended['Data'], list):
+                            extended_news = api_response_extended['Data'][:5]  # Prendre seulement 5 nouvelles
+                        else:
+                            extended_news = []
+                        
+                        for news in extended_news:
+                            news_ts = news.get('PUBLISHED_ON', 0)
+                            
+                            if news_ts:
+                                title = news.get('TITLE', '')
+                                body = news.get('BODY', news.get('SUBTITLE', ''))
+                                summary = body[:200] + '...' if len(body) > 200 else body
+                                
+                                source_name = "CoinDesk"
+                                if 'SOURCE_DATA' in news and news['SOURCE_DATA']:
+                                    source_name = news['SOURCE_DATA'].get('NAME', 'CoinDesk')
+                                
+                                weekly_news.append({
+                                    "date": datetime.fromtimestamp(news_ts).strftime('%Y%m%d%H%M%S'),
+                                    "headline": title,
+                                    "summary": summary,
+                                    "url": news.get('URL', ''),
+                                    "source": source_name,
+                                    "sentiment": news.get('SENTIMENT', ''),
+                                    "keywords": news.get('KEYWORDS', ''),
+                                    "id": news.get('ID', ''),
+                                    "guid": news.get('GUID', '')
+                                })
+                                
+                except Exception as e:
+                    print(f"Extended search failed for {symbol}: {str(e)}")
+            
+            print(f"Found {len(weekly_news)} news items for {symbol} from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+            news_list.append(json.dumps(weekly_news))
+            
+        except requests.exceptions.Timeout:
+            print(f"Timeout fetching news for {symbol}")
+            news_list.append(json.dumps([]))
+        except requests.exceptions.RequestException as e:
+            print(f"Request error fetching news for {symbol}: {str(e)}")
+            print(f"Response content: {e.response.text if hasattr(e, 'response') and e.response else 'No response'}")
+            # Fallback vers l'API CryptoCompare si CoinDesk échoue
+            try:
+                fallback_news = get_crypto_news_fallback(clean_symbol, start_date, end_date)
+                news_list.append(json.dumps(fallback_news))
+            except:
+                news_list.append(json.dumps([]))
+        except Exception as e:
+            print(f"Error fetching news for {symbol}: {str(e)}")
+            news_list.append(json.dumps([]))
+            
+        # Respecter les limites de taux
+        time.sleep(1)  # 1 seconde entre les requêtes
+    
+    data['News'] = news_list
+    return data
+
+
+def get_crypto_news_fallback(clean_symbol, start_date, end_date):
+    """
+    Fonction de fallback utilisant CryptoCompare si CoinDesk échoue
+    """
+    try:
+        import requests
+        
+        url = f"https://min-api.cryptocompare.com/data/v2/news/?categories={clean_symbol}&excludeCategories=Sponsored"
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 200:
+            all_news = response.json().get('Data', [])
+            start_ts = int(datetime.timestamp(start_date))
+            end_ts = int(datetime.timestamp(end_date))
+            
+            fallback_news = []
+            for news in all_news[:10]:  # Limiter à 10 nouvelles
+                news_ts = news.get('published_on', 0)
+                if start_ts <= news_ts <= end_ts:
+                    fallback_news.append({
+                        "date": datetime.fromtimestamp(news_ts).strftime('%Y%m%d%H%M%S'),
+                        "headline": news.get('title', ''),
+                        "summary": news.get('body', '')[:200] + '...',
+                        "url": news.get('url', ''),
+                        "source": "CryptoCompare"
+                    })
+            
+            return fallback_news
+        
+    except Exception as e:
+        print(f"Fallback also failed: {str(e)}")
+    
+    return []
 
 
 def get_company_prompt(symbol):
@@ -234,7 +489,7 @@ def construct_prompt(ticker, curday, n_weeks, use_basics):
         raise gr.Error(f"Invalid date {curday}!")
         
     data = get_stock_data(ticker, steps)
-    data = get_news(ticker, data)
+    data = get_crypto_news(ticker, data) #get_news(ticker, data)
     data['Basics'] = [json.dumps({})] * len(data)
     # print(data)
     

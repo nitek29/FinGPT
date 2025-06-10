@@ -5,7 +5,7 @@ import pandas as pd
 from datetime import date, datetime, timedelta
 from collections import defaultdict
 
-from data import get_news
+from data import get_news, get_crypto_news
 from prompt import get_company_prompt, get_prompt_by_row, sample_news
 
 finnhub_client = finnhub.Client(api_key=os.environ.get("FINNHUB_KEY"))
@@ -76,7 +76,7 @@ def fetch_all_data(symbol, curday, n_weeks=3):
     steps = [n_weeks_before(curday, i) for i in range(n_weeks+1)][::-1]
 
     data = get_stock_data(symbol, steps)
-    data = get_news(symbol, data)
+    data = get_crypto_news(symbol, data)
 
     return data
     

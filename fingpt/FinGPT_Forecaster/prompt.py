@@ -103,7 +103,10 @@ PROMPT_END = {
 }
 
 def get_all_prompts(symbol, data_dir, start_date, end_date, min_past_weeks=1, max_past_weeks=3, with_basics=True):
-
+    
+    # Convert parameters to integers in case they are strings
+    min_past_weeks = int(min_past_weeks)
+    max_past_weeks = int(max_past_weeks)
     
     if with_basics:
         df = pd.read_csv(f'{data_dir}/{symbol}_{start_date}_{end_date}.csv')
@@ -119,46 +122,56 @@ def get_all_prompts(symbol, data_dir, start_date, end_date, min_past_weeks=1, ma
     all_prompts = []
 
     for row_idx, row in df.iterrows():
-
-        prompt = ""
-        if len(prev_rows) >= min_past_weeks:
-            idx = min(random.choice(range(min_past_weeks, max_past_weeks+1)), len(prev_rows))
-            for i in range(-idx, 0):
-                # Add Price Movement (Head)
-                prompt += "\n" + prev_rows[i][0]
-                # Add News of previous weeks
-                sampled_news = sample_news(
-                    prev_rows[i][1],
-                    min(5, len(prev_rows[i][1]))
-                )
-                if sampled_news:
-                    prompt += "\n".join(sampled_news)
-                else:
-                    prompt += "No relative news reported."
-
+        # Get current row data first
         if symbol in CRYPTO:
             head, news, basics = get_crypto_prompt_by_row(symbol, row)
         else:
             head, news, basics = get_prompt_by_row(symbol, row)
 
+        # Add current data to prev_rows
         prev_rows.append((head, news, basics))
-        if len(prev_rows) > max_past_weeks:
-            prev_rows.pop(0)  
-
-        if not prompt:
-            continue
-
-        prediction = map_bin_label(row['Bin Label'])
         
-        prompt = info_prompt + '\n' + prompt + '\n' + basics
+        # Generate prompt only if we have enough historical data
+        prompt = ""
+        if len(prev_rows) > min_past_weeks:
+            # Select random number of past weeks between min and max
+            num_weeks = min(random.randint(min_past_weeks, max_past_weeks), len(prev_rows)-1)
+            
+            # Add historical data to prompt
+            for i in range(-num_weeks-1, -1):
+                # Add Price Movement (Head)
+                prompt += "\n" + prev_rows[i][0]
+                
+                # Add News of previous weeks
+                if prev_rows[i][1]:  # Check if there are any news
+                    news_to_sample = min(5, len(prev_rows[i][1]))
+                    sampled_news = sample_news(prev_rows[i][1], news_to_sample)
+                    if sampled_news:
+                        prompt += "\n".join(sampled_news)
+                    else:
+                        prompt += "\nNo relative news reported."
+                else:
+                    prompt += "\nNo relative news reported."
 
-        prompt += PROMPT_END['crypto' if symbol in CRYPTO else 'company'].format(
-            start_date=row['Start Date'],
-            end_date=row['End Date'],
-            prediction=prediction,
-            symbol=symbol
-        )
+            # Keep only max_past_weeks of history
+            if len(prev_rows) > max_past_weeks:
+                prev_rows.pop(0)
 
-        all_prompts.append(prompt.strip())
+            # Skip if we don't have enough data for a prompt
+            if not prompt:
+                continue
+
+            # Add final prompt components
+            prediction = map_bin_label(row['Bin Label'])
+            full_prompt = info_prompt + '\n' + prompt + '\n' + (basics if basics else "")
+            
+            full_prompt += PROMPT_END['crypto' if symbol in CRYPTO else 'company'].format(
+                start_date=row['Start Date'],
+                end_date=row['End Date'],
+                prediction=prediction,
+                symbol=symbol
+            )
+
+            all_prompts.append(full_prompt.strip())
     
     return all_prompts

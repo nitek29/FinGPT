@@ -27,8 +27,8 @@ from peft import (
 )
 
 # Replace with your own api_key and project name
-os.environ['WANDB_API_KEY'] = ''    # TODO: Replace with your environment variable
-os.environ['WANDB_PROJECT'] = 'fingpt-forecaster'
+os.environ['WANDB_API_KEY'] = '4b3ff27af6f024936ddf363e2db1b597fa3b3f9f'    # TODO: Replace with your environment variable
+os.environ['WANDB_PROJECT'] = 'fingpt'
 
 
 class GenerationEvalCallback(TrainerCallback):

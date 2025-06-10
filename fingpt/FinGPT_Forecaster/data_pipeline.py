@@ -4,7 +4,7 @@ from tqdm import tqdm
 import argparse
 
 from indices import *
-from data import  prepare_data_for_symbol, query_gpt4, create_dataset
+from data import  prepare_data_for_symbol, query_gpt4, create_dataset, query_claude, query_mistral
 from prompt import get_all_prompts
 from data_infererence_fetch import get_curday, fetch_all_data, get_all_prompts_online
 
@@ -38,12 +38,18 @@ def main(args):
     # Acquire data
     print("Acquiring data")
     for symbol in tqdm(index):
+        file_path = os.path.join(data_dir, f"{symbol}_{start_date}_{end_date}_nobasics.csv")
+        if os.path.exists(file_path):
+            print(f"Data for {symbol} already exists, skipping.")
+            continue
         print(f"Processing {symbol}")
         prepare_data_for_symbol(symbol, data_dir, start_date, end_date, with_basics=with_basics)
 
     # Generate prompt and query GPT-4
     print("Generating prompts and querying GPT-4")
-    query_gpt4(index, data_dir, start_date, end_date, min_past_weeks, max_past_weeks, with_basics=with_basics)
+    #query_gpt4(index, data_dir, start_date, end_date, min_past_weeks, max_past_weeks, with_basics=with_basics)
+    #query_claude(index, data_dir, start_date, end_date, min_past_weeks, max_past_weeks, with_basics=with_basics)
+    query_mistral(index, data_dir, start_date, end_date, min_past_weeks, max_past_weeks, with_basics=with_basics)
 
     # Transform into training format
     print("Transforming into training format")
