@@ -21,9 +21,9 @@ finnhub_client = finnhub.Client(api_key=os.environ["FINNHUB_API_KEY"])
 base_model = AutoModelForCausalLM.from_pretrained(
     'meta-llama/Llama-2-7b-chat-hf',
     token=access_token,
-    trust_remote_code=True, 
-    device_map="auto",
-    torch_dtype=torch.float16,
+    trust_remote_code=True,
+    device_map="auto",  # ou "auto"
+    torch_dtype=torch.float16,  # moins exigeant que float16
     offload_folder="offload/"
 )
 model = PeftModel.from_pretrained(

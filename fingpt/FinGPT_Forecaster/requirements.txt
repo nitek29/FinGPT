@@ -1,5 +1,5 @@
-torch==2.0.1
-transformers==4.32.0
+torch
+transformers
 peft==0.5.0
 pandas
 yfinance
@@ -7,3 +7,9 @@ finnhub-python
 nvidia-ml-py3
 backoff
 mistralai
+tensorboard
+datasets
+wandb
+scikit-learn
+rouge_score
+gradio
