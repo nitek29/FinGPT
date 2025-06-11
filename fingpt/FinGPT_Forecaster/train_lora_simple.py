@@ -80,15 +80,19 @@ class GenerationEvalCallback(TrainerCallback):
 
 
 def main(args):
-        
+    # Vérifier si on est sur Mac/PC
+    is_local = not torch.cuda.is_available() or args.ds_config == ""
+    
     model_name = parse_model_name(args.base_model, args.from_remote)
     
-    # load model
+    # load model - configuration adaptée pour Mac/PC
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        #load_in_8bit=True,
-        trust_remote_code=True
+        # load_in_8bit=torch.cuda.is_available(),  # Seulement si GPU
+        trust_remote_code=True,
+        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
     )
+    
     if args.local_rank == 0:
         print(model)
     
@@ -110,12 +114,17 @@ def main(args):
     
     original_dataset = datasets.DatasetDict({'train': dataset_train, 'test': dataset_test})
     
-    eval_dataset = original_dataset['test'].shuffle(seed=42).select(range(50))
+    eval_dataset = original_dataset['test'].shuffle(seed=42).select(range(min(50, len(original_dataset['test']))))
     
     dataset = original_dataset.map(partial(tokenize, args, tokenizer))
     print('original dataset length: ', len(dataset['train']))
     dataset = dataset.filter(lambda x: not x['exceed_max_length'])
     print('filtered dataset length: ', len(dataset['train']))
+    
+    if len(dataset['train']) == 0:
+        print("❌ ERROR: All examples exceed max_length. Increase --max_length parameter!")
+        return
+    
     dataset = dataset.remove_columns(
         ['prompt', 'answer', 'label', 'symbol', 'period', 'exceed_max_length']
     )
@@ -123,36 +132,38 @@ def main(args):
     current_time = datetime.now()
     formatted_time = current_time.strftime('%Y%m%d%H%M')
     
+    # Configuration adaptée pour Mac/PC
     training_args = TrainingArguments(
-        output_dir=f'finetuned_models/{args.run_name}_{formatted_time}', # 保存位置
+        output_dir=f'finetuned_models/{args.run_name}_{formatted_time}',
         logging_steps=args.log_interval,
         num_train_epochs=args.num_epochs,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
-        dataloader_num_workers=args.num_workers,
+        dataloader_num_workers=args.num_workers if torch.cuda.is_available() else 0,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
         warmup_ratio=args.warmup_ratio,
         lr_scheduler_type=args.scheduler,
         save_steps=args.eval_steps,
         eval_steps=args.eval_steps,
-        fp16=True,
-        deepspeed=args.ds_config,
-        evaluation_strategy=args.evaluation_strategy,
+        fp16=torch.cuda.is_available(),
+        # Pas de DeepSpeed pour Mac/PC
+        eval_strategy=args.evaluation_strategy,
         remove_unused_columns=False,
-        report_to='wandb',
-        run_name=args.run_name
+        report_to='wandb' if torch.cuda.is_available() else None,
+        run_name=args.run_name,
+        dataloader_pin_memory=False  # Désactivé pour Mac
     )
     
-    model.gradient_checkpointing_enable()
-    model.enable_input_require_grads()
-    model.is_parallelizable = True
-    model.model_parallel = True
-    model.model.config.use_cache = False
+    # Configuration modèle adaptée
+    if torch.cuda.is_available():
+        model.gradient_checkpointing_enable()
+        model.enable_input_require_grads()
+        model.is_parallelizable = True
+        model.model_parallel = True
+        model.model.config.use_cache = False
     
-    # model = prepare_model_for_int8_training(model)
-
     # setup peft
     peft_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
@@ -181,13 +192,16 @@ def main(args):
                 eval_dataset=eval_dataset,
                 ignore_until_epoch=round(0.3 * args.num_epochs)
             )
-        ]
+        ] if torch.cuda.is_available() else []  # Pas de callback sur Mac pour économiser la mémoire
     )
     
-    if torch.__version__ >= "2" and sys.platform != "win32":
+    # Compilation seulement sur Linux avec GPU
+    if torch.__version__ >= "2" and sys.platform != "darwin" and torch.cuda.is_available():
         model = torch.compile(model)
     
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
     trainer.train()
 
     # save model
